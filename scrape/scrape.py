@@ -6,6 +6,8 @@ import urllib.parse
 from pathlib import Path
 from typing import DefaultDict, Dict, List, Set, Tuple
 
+import pdb
+
 import aiofiles
 import httpx
 from bs4 import BeautifulSoup
@@ -172,7 +174,7 @@ async def collect_service_info() -> List[httpx.Response]:
         return service_page_responses
 
 
-async def extract_actions(html: str) -> Tuple[str, str, Set[str]]:
+async def extract_actions(html: str) -> Tuple[str, str, Dict[str, str]]:
     parsed_html = BeautifulSoup(html, features="lxml")
     service_prefixes = parsed_html.body.find_all(is_service_prefix)
     if len(service_prefixes) < 1:
@@ -183,13 +185,13 @@ async def extract_actions(html: str) -> Tuple[str, str, Set[str]]:
     service_prefix_tag = service_prefixes[0]
     service_name = service_prefix_tag.previous[: -len(" (service prefix: ")]
     service_prefix = service_prefix_tag.text
-    actions = set()
+    actions = {}
 
     for table in parsed_html.body.find_all("table"):
         header = table.find("th")
         if not header or header.text != "Actions":
             continue
-        actions |= await _actions_from_table(table)
+        actions = actions | await _actions_from_table(table)
 
     return service_name, service_prefix, actions
 
@@ -225,21 +227,35 @@ async def write_service(
         await fp.write("\n".join(content))
 
 
-async def _actions_from_table(table) -> Set[str]:
-    actions = set()
-    skip_next_lines = 0
+async def _actions_from_table(table) -> Dict[str, str]:
+    actions = {}
+    # skip_next_lines = 0
+
+    action_columns = [table_column.text for table_column in table.find_all("th")]
+
     for table_row in table.find_all("tr"):
-        if skip_next_lines:
-            skip_next_lines -= 1
-            continue
-        table_cell = table_row.find("td")
-        if not table_cell:
-            continue
-        skip_next_lines = int(table_cell.attrs.get("rowspan") or 1) - 1
-        action: str = (table_cell.text.strip().split() or [""])[0]
-        if not action:
-            continue
-        actions.add(action)
+        row_cell_index = 0
+        for table_cell in table_row.find_all("td"):
+            column_name = action_columns[row_cell_index]
+
+            if column_name == "Actions":
+                action: str = (table_cell.text.strip().split() or [""])[0]
+                if not action:
+                    break
+                actions[action] = {}
+                current_action = action
+                row_cell_index += 1
+                continue
+
+            value: str = table_cell.text.strip()
+
+            if not value:
+                row_cell_index += 1
+                continue
+
+            actions[action][column_name] = value
+            row_cell_index += 1
+
     return actions
 
 
